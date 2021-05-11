@@ -1,5 +1,6 @@
 from featuretools import Relationship, Timedelta, primitives
 from featuretools.entityset.relationship import RelationshipPath
+from featuretools.feature_base.utils import is_valid_input
 from featuretools.primitives.base import (
     AggregationPrimitive,
     PrimitiveBase,
@@ -25,7 +26,7 @@ from featuretools.variable_types import (
 
 
 class FeatureBase(object):
-    def __init__(self, entity, base_features, relationship_path, primitive, name=None, names=None):
+    def __init__(self, entityset, entity, base_features, relationship_path, primitive, name=None, names=None):
         """Base class for all features
 
         Args:
@@ -38,8 +39,8 @@ class FeatureBase(object):
         assert all(isinstance(f, FeatureBase) for f in base_features), \
             "All base features must be features"
 
-        self.entity_id = entity.id
-        self.entityset = entity.entityset.metadata
+        self.entity_id = entity
+        self.entityset = entityset  # TODO: use entityset.metadata or equivalent
 
         self.base_features = base_features
 
@@ -149,7 +150,7 @@ class FeatureBase(object):
 
             for t in input_types:
                 zipped = list(zip(t, self.base_features))
-                if all([issubclass(f.variable_type, v) for v, f in zipped]):
+                if all([is_valid_input(f.return_type, v) for v, f in zipped]):
                     return True
         else:
             return True
@@ -158,7 +159,7 @@ class FeatureBase(object):
     @property
     def entity(self):
         """Entity this feature belongs too"""
-        return self.entityset[self.entity_id]
+        return self.entityset[self.entity_id].ww
 
     @property
     def number_output_features(self):
@@ -342,11 +343,11 @@ class FeatureBase(object):
 class IdentityFeature(FeatureBase):
     """Feature for entity that is equivalent to underlying variable"""
 
-    def __init__(self, variable, name=None):
-        entity_id = variable.entity_id
-        self.variable = variable.entityset.metadata[entity_id][variable.id]
-        self.return_type = type(variable)
-        super(IdentityFeature, self).__init__(entity=variable.entity,
+    def __init__(self, entityset, table, column, name=None):
+        self.variable = entityset[table].ww[column].ww # TODO: necessary?
+        self.return_type = self.variable.schema
+        super(IdentityFeature, self).__init__(entityset=entityset,
+                                              entity=table,
                                               base_features=[],
                                               relationship_path=RelationshipPath([]),
                                               primitive=PrimitiveBase,
@@ -361,7 +362,7 @@ class IdentityFeature(FeatureBase):
 
     def copy(self):
         """Return copy of feature"""
-        return IdentityFeature(self.variable)
+        return IdentityFeature(self.variable)  # TODO
 
     def generate_name(self):
         return self.variable.name
@@ -378,7 +379,7 @@ class IdentityFeature(FeatureBase):
 
     @property
     def variable_type(self):
-        return type(self.variable)
+        return self.return_type
 
 
 class DirectFeature(FeatureBase):
@@ -652,7 +653,8 @@ class TransformFeature(FeatureBase):
             if bf.number_output_features > 1:
                 raise ValueError("Cannot stack on whole multi-output feature.")
 
-        super(TransformFeature, self).__init__(entity=base_features[0].entity,
+        super(TransformFeature, self).__init__(entityset=base_features[0].entityset,
+                                               entity=base_features[0].entity_id,
                                                base_features=base_features,
                                                relationship_path=RelationshipPath([]),
                                                primitive=primitive,

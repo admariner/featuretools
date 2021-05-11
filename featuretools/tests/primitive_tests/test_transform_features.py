@@ -106,13 +106,13 @@ def test_init_and_name(es):
 
 
 def test_relationship_path(es):
-    f = ft.TransformFeature(es['log']['datetime'], Hour)
+    f = ft.TransformFeature(es['log'].ww['datetime'], Hour)
 
     assert len(f.relationship_path) == 0
 
 
 def test_serialization(es):
-    value = ft.IdentityFeature(es['log']['value'])
+    value = ft.IdentityFeature(es, 'log', 'value')
     primitive = ft.primitives.MultiplyNumericScalar(value=2)
     value_x2 = ft.TransformFeature(value, primitive)
 

@@ -66,8 +66,8 @@ def test_primitive():
 
 
 def test_get_depth(es):
-    log_id_feat = es['log']['id']
-    customer_id_feat = es['customers']['id']
+    log_id_feat = ft.IdentityFeature(es, 'log', 'id')
+    customer_id_feat = ft.IdentityFeature(es, 'customers', 'id')
     count_logs = ft.Feature(log_id_feat, parent_entity=es['sessions'], primitive=Count)
     sum_count_logs = ft.Feature(count_logs, parent_entity=es['customers'], primitive=Sum)
     num_logs_greater_than_5 = sum_count_logs > 5
