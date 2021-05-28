@@ -82,6 +82,8 @@ class EntitySet(object):
         relationships = relationships or []
         for df_name in dataframes:
             df = dataframes[df_name][0]
+            if df.ww.schema is not None and df.ww.name != df_name:
+                raise ValueError(f"Naming conflict in dataframes dictionary: dictionary key '{df_name}' does not match dataframe name '{df.ww.name}'")
 
             index_column = None
             time_index = None
@@ -320,8 +322,12 @@ class EntitySet(object):
         parent_ltype = parent_df.ww.logical_types[parent_column]
         child_ltype = child_df.ww.logical_types[child_column]
         if parent_ltype != child_ltype:
+            difference_msg = ''
+            if str(parent_ltype) == str(child_ltype):
+                difference_msg = "There is a conflict between the parameters. "
+
             warnings.warn(f'Logical type {child_ltype} for child column {child_column} does not match '
-                          f'parent column {parent_column} logical type {parent_ltype}. '
+                          f'parent column {parent_column} logical type {parent_ltype}. {difference_msg}'
                           'Changing child logical type to match parent.')
             child_df.ww.set_types(logical_types={child_column: parent_ltype})
 
@@ -494,8 +500,8 @@ class EntitySet(object):
     ###########################################################################
 
     def add_dataframe(self,
-                      dataframe_name,
                       dataframe,
+                      dataframe_name=None,
                       index=None,
                       logical_types=None,
                       semantic_tags=None,
@@ -507,9 +513,10 @@ class EntitySet(object):
         Add a DataFrame to the EntitySet with Woodwork typing information.
 
         Args:
-            dataframe_name (str) : Unique name to associate with this dataframe.
-
             dataframe (pandas.DataFrame) : Dataframe containing the data.
+
+            dataframe_name (str, optional) : Unique name to associate with this dataframe. Must be
+                provided if Woodwork is not initialized on the input DataFrame.
 
             index (str, optional): Name of the column used to index the dataframe.
                 Must be unique. If None, take the first column.
@@ -574,6 +581,9 @@ class EntitySet(object):
                              "are not strings)".format(non_string_names))
 
         if dataframe.ww.schema is None:
+            if dataframe_name is None:
+                raise ValueError('Cannot add dataframe to EntitySet without a name. '
+                                 'Please provide a value for the dataframe_name parameter.')
             # Warn when performing inference on Dask or Koalas DataFrames
             if not set(dataframe.columns).issubset(set(logical_types.keys())) and \
                     (isinstance(dataframe, dd.DataFrame) or is_instance(dataframe, ks, 'DataFrame')):
@@ -594,6 +604,8 @@ class EntitySet(object):
                 dataframe.ww.set_index(dataframe.columns[0])
 
         else:
+            if dataframe.ww.name is None:
+                raise ValueError('Cannot add a Woodwork DataFrame to EntitySet without a name')
             if dataframe.ww.index is None:
                 raise ValueError('Cannot add Woodwork DataFrame to EntitySet without index')
 
@@ -610,11 +622,10 @@ class EntitySet(object):
                 extra_params.append('semantic_tags')
             if already_sorted:
                 extra_params.append('already_sorted')
+            if dataframe_name is not None and dataframe_name != dataframe.ww.name:
+                extra_params.append('dataframe_name')
             if extra_params:
                 warnings.warn("A Woodwork-initialized DataFrame was provided, so the following parameters were ignored: " + ", ".join(extra_params))
-
-            # make sure name is set to match input dataframe_name
-            dataframe.ww._schema.name = dataframe_name
 
         if dataframe.ww.time_index is not None:
             self._check_uniform_time_index(dataframe)
@@ -623,7 +634,7 @@ class EntitySet(object):
         if secondary_time_index:
             self._set_secondary_time_index(dataframe, secondary_time_index=secondary_time_index)
 
-        self.dataframe_dict[dataframe_name] = dataframe
+        self.dataframe_dict[dataframe.ww.name] = dataframe
         self.reset_data_description()
         return self
 
@@ -812,7 +823,6 @@ class EntitySet(object):
                               )
 
         self.add_dataframe(
-            new_dataframe_name,
             new_dataframe,
             secondary_time_index=make_secondary_time_index
         )
@@ -1299,7 +1309,7 @@ class EntitySet(object):
         # Update the dtypes to match the original dataframe's and transform data if necessary
         for col_name in df.columns:
             series = df[col_name]
-            updated_series = ww.accessor_utils._update_column_dtype(series, self[dataframe_name].ww.logical_types[col_name])
+            updated_series = self[dataframe_name].ww.logical_types[col_name].transform(series)
             if updated_series is not series:
                 df[col_name] = updated_series
 
