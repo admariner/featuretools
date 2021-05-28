@@ -6,6 +6,7 @@ import tempfile
 import pandas as pd
 import woodwork as ww
 from woodwork.deserialize import read_woodwork_table
+from woodwork import logical_types as ltypes
 
 from featuretools.entityset.relationship import Relationship
 from featuretools.utils.gen_utils import check_schema_version

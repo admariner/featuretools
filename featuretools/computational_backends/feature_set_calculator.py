@@ -6,7 +6,6 @@ import numpy as np
 import pandas as pd
 import pandas.api.types as pdtypes
 
-from featuretools import variable_types
 from featuretools.entityset.relationship import RelationshipPath
 from featuretools.exceptions import UnknownFeature
 from featuretools.feature_base import (
@@ -23,6 +22,7 @@ from featuretools.utils.gen_utils import (
     import_or_none,
     is_instance
 )
+from woodwork.column_schema import ColumnSchema
 
 ks = import_or_none('databricks.koalas')
 
@@ -739,20 +739,20 @@ class FeatureSetCalculator(object):
         # pandas behavior: https://github.com/pydata/pandas/issues/3752
         for f in features:
             if (f.number_output_features == 1 and
-                    f.variable_type == variable_types.Numeric and
+                    'numeric' in f.column_schema.semantic_tags and
                     frame[f.get_name()].dtype.name in ['object', 'bool']):
                 frame[f.get_name()] = frame[f.get_name()].astype(float)
 
         return frame
 
-    def _necessary_columns(self, entity_id, feature_names):
+    def _necessary_columns(self, dataframe_name, feature_names):
         # We have to keep all Id columns because we don't know what forward
         # relationships will come from this node.
-        entity = self.entityset[entity_id]
-        index_columns = {v.id for v in entity.variables
-                         if isinstance(v, (variable_types.Index,
-                                           variable_types.Id,
-                                           variable_types.TimeIndex))}
+        df = self.entityset[dataframe_name]
+        index_columns = {col.name for col in df.columns
+                         if (df.ww.index ==  col.name or
+                             'foreign_key' in col.ww.semantic_tags or
+                             df.ww.time_index == col.name)}
         features = (self.feature_set.features_by_name[name]
                     for name in feature_names)
         feature_columns = {f.variable.id for f in features

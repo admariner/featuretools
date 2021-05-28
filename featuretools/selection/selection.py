@@ -1,4 +1,3 @@
-from featuretools import variable_types as vtypes
 
 
 def remove_low_information_features(feature_matrix, features=None):
@@ -122,7 +121,7 @@ def remove_highly_correlated_features(feature_matrix, features=None, pct_corr_th
         features_to_keep = []
 
     boolean = ['bool']
-    numeric_and_boolean_dtypes = vtypes.PandasTypes._pandas_numerics + boolean
+    numeric_and_boolean_dtypes = [] # TODO: fix this. vtypes.PandasTypes._pandas_numerics + boolean
 
     fm_to_check = (feature_matrix[features_to_check]).select_dtypes(
         include=numeric_and_boolean_dtypes)
