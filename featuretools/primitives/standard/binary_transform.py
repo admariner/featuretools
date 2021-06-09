@@ -25,7 +25,7 @@ class GreaterThan(TransformPrimitive):
     name = "greater_than"
     input_types = [[ColumnSchema(semantic_tags={'numeric'}), ColumnSchema(semantic_tags={'numeric'})],
                    [ColumnSchema(logical_type=Datetime), ColumnSchema(logical_type=Datetime)],
-                   [ColumnSchema(logical_type=Ordinal), ColumnSchema(logical_type=Ordinal)]]
+                   [ColumnSchema(logical_type=Ordinal(order=[])), ColumnSchema(logical_type=Ordinal(order=[]))]]
     return_type = ColumnSchema(logical_type=Boolean)
     compatibility = [Library.PANDAS, Library.DASK]
     description_template = "whether {} is greater than {}"
@@ -53,7 +53,7 @@ class GreaterThanScalar(TransformPrimitive):
     name = "greater_than_scalar"
     input_types = [[ColumnSchema(semantic_tags={'numeric'})],
                    [ColumnSchema(logical_type=Datetime)],
-                   [ColumnSchema(logical_type=Ordinal)]]
+                   [ColumnSchema(logical_type=Ordinal(order=[]))]]
     return_type = ColumnSchema(logical_type=Boolean)
     compatibility = [Library.PANDAS, Library.DASK, Library.KOALAS]
 
@@ -86,7 +86,7 @@ class GreaterThanEqualTo(TransformPrimitive):
     name = "greater_than_equal_to"
     input_types = [[ColumnSchema(semantic_tags={'numeric'}), ColumnSchema(semantic_tags={'numeric'})],
                    [ColumnSchema(logical_type=Datetime), ColumnSchema(logical_type=Datetime)],
-                   [ColumnSchema(logical_type=Ordinal), ColumnSchema(logical_type=Ordinal)]]
+                   [ColumnSchema(logical_type=Ordinal(order=[])), ColumnSchema(logical_type=Ordinal(order=[]))]]
     return_type = ColumnSchema(logical_type=Boolean)
     compatibility = [Library.PANDAS, Library.DASK, Library.KOALAS]
     description_template = "whether {} is greater than or equal to {}"
@@ -114,7 +114,7 @@ class GreaterThanEqualToScalar(TransformPrimitive):
     name = "greater_than_equal_to_scalar"
     input_types = [[ColumnSchema(semantic_tags={'numeric'})],
                    [ColumnSchema(logical_type=Datetime)],
-                   [ColumnSchema(logical_type=Ordinal)]]
+                   [ColumnSchema(logical_type=Ordinal(order=[]))]]
     return_type = ColumnSchema(logical_type=Boolean)
     compatibility = [Library.PANDAS, Library.DASK, Library.KOALAS]
 
@@ -147,7 +147,7 @@ class LessThan(TransformPrimitive):
     name = "less_than"
     input_types = [[ColumnSchema(semantic_tags={'numeric'}), ColumnSchema(semantic_tags={'numeric'})],
                    [ColumnSchema(logical_type=Datetime), ColumnSchema(logical_type=Datetime)],
-                   [ColumnSchema(logical_type=Ordinal), ColumnSchema(logical_type=Ordinal)]]
+                   [ColumnSchema(logical_type=Ordinal(order=[])), ColumnSchema(logical_type=Ordinal(order=[]))]]
     return_type = ColumnSchema(logical_type=Boolean)
     compatibility = [Library.PANDAS, Library.DASK, Library.KOALAS]
     description_template = "whether {} is less than {}"
@@ -175,7 +175,7 @@ class LessThanScalar(TransformPrimitive):
     name = "less_than_scalar"
     input_types = [[ColumnSchema(semantic_tags={'numeric'})],
                    [ColumnSchema(logical_type=Datetime)],
-                   [ColumnSchema(logical_type=Ordinal)]]
+                   [ColumnSchema(logical_type=Ordinal(order=[]))]]
     return_type = ColumnSchema(logical_type=Boolean)
     compatibility = [Library.PANDAS, Library.DASK, Library.KOALAS]
 
@@ -208,7 +208,7 @@ class LessThanEqualTo(TransformPrimitive):
     name = "less_than_equal_to"
     input_types = [[ColumnSchema(semantic_tags={'numeric'}), ColumnSchema(semantic_tags={'numeric'})],
                    [ColumnSchema(logical_type=Datetime), ColumnSchema(logical_type=Datetime)],
-                   [ColumnSchema(logical_type=Ordinal), ColumnSchema(logical_type=Ordinal)]]
+                   [ColumnSchema(logical_type=Ordinal(order=[])), ColumnSchema(logical_type=Ordinal(order=[]))]]
     return_type = ColumnSchema(logical_type=Boolean)
     compatibility = [Library.PANDAS, Library.DASK, Library.KOALAS]
     description_template = "whether {} is less than or equal to {}"
@@ -236,7 +236,7 @@ class LessThanEqualToScalar(TransformPrimitive):
     name = "less_than_equal_to_scalar"
     input_types = [[ColumnSchema(semantic_tags={'numeric'})],
                    [ColumnSchema(logical_type=Datetime)],
-                   [ColumnSchema(logical_type=Ordinal)]]
+                   [ColumnSchema(logical_type=Ordinal(order=[]))]]
     return_type = ColumnSchema(logical_type=Boolean)
     compatibility = [Library.PANDAS, Library.DASK, Library.KOALAS]
 
