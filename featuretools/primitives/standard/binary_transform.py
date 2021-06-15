@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 from woodwork.column_schema import ColumnSchema
-from woodwork.logical_types import Boolean, Datetime, Ordinal
+from woodwork.logical_types import Boolean, BooleanNullable, Datetime, Ordinal
 
 from featuretools.primitives.base.transform_primitive_base import (
     TransformPrimitive
@@ -553,6 +553,8 @@ class MultiplyNumeric(TransformPrimitive):
         [ColumnSchema(semantic_tags={'numeric'}), ColumnSchema(semantic_tags={'numeric'})],
         [ColumnSchema(semantic_tags={'numeric'}), ColumnSchema(logical_type=Boolean)],
         [ColumnSchema(logical_type=Boolean), ColumnSchema(semantic_tags={'numeric'})],
+        [ColumnSchema(semantic_tags={'numeric'}), ColumnSchema(logical_type=BooleanNullable)],
+        [ColumnSchema(logical_type=BooleanNullable), ColumnSchema(semantic_tags={'numeric'})],
     ]
     return_type = ColumnSchema(semantic_tags={'numeric'})
     commutative = True
@@ -610,8 +612,11 @@ class MultiplyBoolean(TransformPrimitive):
         [True, False, False]
     """
     name = "multiply_boolean"
-    input_types = [ColumnSchema(logical_type=Boolean), ColumnSchema(logical_type=Boolean)]
-    return_type = ColumnSchema(logical_type=Boolean)
+    input_types = [[ColumnSchema(logical_type=Boolean), ColumnSchema(logical_type=Boolean)],
+                   [ColumnSchema(logical_type=Boolean), ColumnSchema(logical_type=BooleanNullable)],
+                   [ColumnSchema(logical_type=BooleanNullable), ColumnSchema(logical_type=Boolean)],
+                   [ColumnSchema(logical_type=BooleanNullable), ColumnSchema(logical_type=BooleanNullable)]]
+    return_type = ColumnSchema(logical_type=BooleanNullable)
     commutative = True
     compatibility = [Library.PANDAS, Library.DASK]
     description_template = "the product of {} and {}"
@@ -820,8 +825,11 @@ class And(TransformPrimitive):
         [False, True, False]
     """
     name = "and"
-    input_types = [ColumnSchema(logical_type=Boolean), ColumnSchema(logical_type=Boolean)]
-    return_type = ColumnSchema(logical_type=Boolean)
+    input_types = [[ColumnSchema(logical_type=Boolean), ColumnSchema(logical_type=Boolean)],
+                   [ColumnSchema(logical_type=Boolean), ColumnSchema(logical_type=BooleanNullable)],
+                   [ColumnSchema(logical_type=BooleanNullable), ColumnSchema(logical_type=Boolean)],
+                   [ColumnSchema(logical_type=BooleanNullable), ColumnSchema(logical_type=BooleanNullable)]]
+    return_type = ColumnSchema(logical_type=BooleanNullable)
     commutative = True
     compatibility = [Library.PANDAS, Library.DASK, Library.KOALAS]
     description_template = "whether {} and {} are true"
@@ -847,8 +855,11 @@ class Or(TransformPrimitive):
         [True, True, False]
     """
     name = "or"
-    input_types = [ColumnSchema(logical_type=Boolean), ColumnSchema(logical_type=Boolean)]
-    return_type = ColumnSchema(logical_type=Boolean)
+    input_types = [[ColumnSchema(logical_type=Boolean), ColumnSchema(logical_type=Boolean)],
+                   [ColumnSchema(logical_type=Boolean), ColumnSchema(logical_type=BooleanNullable)],
+                   [ColumnSchema(logical_type=BooleanNullable), ColumnSchema(logical_type=Boolean)],
+                   [ColumnSchema(logical_type=BooleanNullable), ColumnSchema(logical_type=BooleanNullable)]]
+    return_type = ColumnSchema(logical_type=BooleanNullable)
     commutative = True
     compatibility = [Library.PANDAS, Library.DASK, Library.KOALAS]
     description_template = "whether {} is true or {} is true"

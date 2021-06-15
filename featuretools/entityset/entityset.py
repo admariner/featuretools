@@ -11,21 +11,19 @@ import woodwork as ww
 from featuretools.entityset import deserialize, serialize
 from featuretools.entityset.relationship import Relationship, RelationshipPath
 from featuretools.utils.gen_utils import import_or_none, is_instance
-
-# import pandas.api.types as pdtypes
-
-
-# from featuretools.utils.plot_utils import (
-#     check_graphviz,
-#     get_graphviz_format,
-#     save_graph
-# )
-# from featuretools.utils.wrangle import _check_timedelta
+from featuretools.utils.plot_utils import (
+    check_graphviz,
+    get_graphviz_format,
+    save_graph
+)
+from featuretools.utils.wrangle import _check_timedelta
 
 ks = import_or_none('databricks.koalas')
 
 pd.options.mode.chained_assignment = None  # default='warn'
 logger = logging.getLogger('featuretools.entityset')
+
+LTI_COLUMN_NAME = '_ft_last_time'
 
 
 class EntitySet(object):
@@ -115,20 +113,25 @@ class EntitySet(object):
         self.reset_data_description()
 
     def __sizeof__(self):
-        return sum([df.__sizeof__() + df.ww.metadata.get('last_time_index').__sizeof__() for df in self.dataframes])
+        return sum([df.__sizeof__() for df in self.dataframes])
 
     def __dask_tokenize__(self):
         return (EntitySet, serialize.entityset_to_description(self.metadata))
 
     def __eq__(self, other, deep=False):
+        if self.id != other.id:
+            return False
+        if self.time_type != other.time_type:
+            return False
         if len(self.dataframe_dict) != len(other.dataframe_dict):
             return False
         for df_name, df in self.dataframe_dict.items():
             if df_name not in other.dataframe_dict:
                 return False
-            # --> WW bug: Waiting on deep behavior for WW equality
-            if not df.ww.__eq__(other[df_name].ww):
+            if not df.ww.__eq__(other[df_name].ww, deep=deep):
                 return False
+        if not len(self.relationships) == len(other.relationships):
+            return False
         for r in self.relationships:
             if r not in other.relationships:
                 return False
@@ -151,6 +154,20 @@ class EntitySet(object):
             return self.dataframe_dict[dataframe_name]
         name = self.id or "entity set"
         raise KeyError('DataFrame %s does not exist in %s' % (dataframe_name, name))
+
+    def __deepcopy__(self, memo):
+        cls = self.__class__
+        result = cls.__new__(cls)
+        memo[id(self)] = result
+        for k, v in self.__dict__.items():
+            copied_attr = copy.deepcopy(v, memo)
+            # Must initialize Woodwork on all the DataFrames
+            if k == 'dataframe_dict':
+                for df_name, new_df in copied_attr.items():
+                    schema = copy.deepcopy(self.dataframe_dict[df_name].ww.schema, memo=memo)
+                    new_df.ww.init(schema=schema)
+            setattr(result, k, copied_attr)
+        return result
 
     @property
     def dataframes(self):
@@ -351,7 +368,6 @@ class EntitySet(object):
             "Cannot set secondary time index if Woodwork is not initialized"
         self._check_secondary_time_index(dataframe, secondary_time_index)
         if secondary_time_index is not None:
-            # --> WW bug: series in Metadata can be problematic
             dataframe.ww.metadata['secondary_time_index'] = secondary_time_index
 
     ###########################################################################
@@ -746,7 +762,7 @@ class EntitySet(object):
 
                 time_index_types = (base_dataframe.ww.logical_types[base_dataframe.ww.time_index],
                                     base_dataframe.ww.semantic_tags[base_dataframe.ww.time_index],
-                                    base_dataframe.ww.columns[base_dataframe.ww.time_index].metadata,  # --> not sure we want to maintain metadata here - first time index might be clunkly
+                                    base_dataframe.ww.columns[base_dataframe.ww.time_index].metadata,
                                     base_dataframe.ww.columns[base_dataframe.ww.time_index].description)
             else:
                 # If base_time_index is in copy_columns then we've already added the transfer types
@@ -901,7 +917,8 @@ class EntitySet(object):
         """
         Calculates the last time index values for each dataframe (the last time
         an instance or children of that instance were observed).  Used when
-        calculating features using training windows
+        calculating features using training windows. Adds the last time index as
+        a series named _ft_last_time on the dataframe.
         Args:
             updated_dataframes (list[str]): List of dataframe names to update last_time_index for
                 (will update all parents of those dataframes as well)
@@ -934,9 +951,16 @@ class EntitySet(object):
             queue = self.dataframes[:]
 
         explored = set()
+        # Store the last time indexes for the entire entityset in a dictionary to update
+        es_lti_dict = {}
+        for df in self.dataframes:
+            lti_col = df.ww.metadata.get('last_time_index')
+            if lti_col is not None:
+                lti_col = df[lti_col]
+            es_lti_dict[df.ww.name] = lti_col
 
         for df in queue:
-            df.ww.metadata['last_time_index'] = None
+            es_lti_dict[df.ww.name] = None
 
         # We will explore children of dataframes on the queue,
         # which may not be in the to_explore set. Therefore,
@@ -945,7 +969,7 @@ class EntitySet(object):
         while not to_explore.issubset(explored):
             dataframe = queue.pop(0)
 
-            if dataframe.ww.metadata.get('last_time_index') is None:
+            if es_lti_dict[dataframe.ww.name] is None:
                 if dataframe.ww.time_index is not None:
                     lti = dataframe[dataframe.ww.time_index].copy()
                     if isinstance(dataframe, dd.DataFrame):
@@ -963,7 +987,8 @@ class EntitySet(object):
                         # Cannot have a category dtype with nans when calculating last time index
                         lti = lti.astype('object')
                         lti[:] = None
-                dataframe.ww.metadata['last_time_index'] = lti
+
+                es_lti_dict[dataframe.ww.name] = lti
 
             if dataframe.ww.name in children:
                 child_dataframes = children[dataframe.ww.name]
@@ -977,6 +1002,8 @@ class EntitySet(object):
                     # so we didn't need this logic
                     for df in child_dataframes:
                         if df.ww.name not in explored and df.ww.name not in [q.ww.name for q in queue]:
+                            # must also reset last time index here
+                            es_lti_dict[df.ww.name] = None
                             queue.append(df)
                     queue.append(dataframe)
                     continue
@@ -984,18 +1011,19 @@ class EntitySet(object):
                 # updated last time from all children
                 for child_df in child_dataframes:
                     # TODO: Figure out if Dask code related to indexes is important for Koalas
-                    if child_df.ww.metadata.get('last_time_index') is None:
+                    if es_lti_dict[child_df.ww.name] is None:
                         continue
                     link_col = child_cols[dataframe.ww.name][child_df.ww.name].name
 
-                    lti_is_dask = isinstance(child_df.ww.metadata.get('last_time_index'), dd.Series)
-                    lti_is_koalas = is_instance(child_df.ww.metadata.get('last_time_index'), ks, 'Series')
+                    lti_is_dask = isinstance(es_lti_dict[child_df.ww.name], dd.Series)
+                    lti_is_koalas = is_instance(es_lti_dict[child_df.ww.name], ks, 'Series')
+
                     if lti_is_dask or lti_is_koalas:
                         to_join = child_df[link_col]
                         if lti_is_dask:
                             to_join.index = child_df[child_df.ww.index]
 
-                        lti_df = child_df.ww.metadata.get('last_time_index').to_frame(name='last_time').join(
+                        lti_df = es_lti_dict[child_df.ww.name].to_frame(name='last_time').join(
                             to_join.to_frame(name=dataframe.ww.index)
                         )
 
@@ -1005,10 +1033,10 @@ class EntitySet(object):
                             lti_df.index = new_index
                         lti_df = lti_df.groupby(lti_df[dataframe.ww.index]).agg('max')
 
-                        lti_df = dataframe.ww.metadata.get('last_time_index').to_frame(name='last_time_old').join(lti_df)
+                        lti_df = es_lti_dict[dataframe.ww.name].to_frame(name='last_time_old').join(lti_df)
 
                     else:
-                        lti_df = pd.DataFrame({'last_time': child_df.ww.metadata.get('last_time_index'),
+                        lti_df = pd.DataFrame({'last_time': es_lti_dict[child_df.ww.name],
                                                dataframe.ww.index: child_df[link_col]})
 
                         # sort by time and keep only the most recent
@@ -1020,8 +1048,8 @@ class EntitySet(object):
                                                inplace=True)
 
                         lti_df.set_index(dataframe.ww.index, inplace=True)
-                        lti_df = lti_df.reindex(dataframe.ww.metadata.get('last_time_index').index)
-                        lti_df['last_time_old'] = dataframe.ww.metadata.get('last_time_index')
+                        lti_df = lti_df.reindex(es_lti_dict[dataframe.ww.name].index)
+                        lti_df['last_time_old'] = es_lti_dict[dataframe.ww.name]
                     if not (lti_is_dask or lti_is_koalas) and lti_df.empty:
                         # Pandas errors out if it tries to do fillna and then max on an empty dataframe
                         lti_df = pd.Series()
@@ -1036,14 +1064,78 @@ class EntitySet(object):
                             lti_df['last_time_old'] = lti_df['last_time_old'].astype('datetime64[ns]')
                             lti_df = lti_df.fillna(pd.to_datetime('1800-01-01 00:00')).max(axis=1)
                             lti_df = lti_df.replace(pd.to_datetime('1800-01-01 00:00'), pd.NaT)
-                    # lti_df = lti_df.apply(lambda x: x.dropna().max(), axis=1)
 
-                    dataframe.ww.metadata['last_time_index'] = lti_df
-                    dataframe.ww.metadata.get('last_time_index').name = 'last_time'
+                    es_lti_dict[dataframe.ww.name] = lti_df
+                    es_lti_dict[dataframe.ww.name].name = 'last_time'
 
             explored.add(dataframe.ww.name)
-        self.reset_data_description()
 
+        # Store the last time index on the DataFrames
+        dfs_to_update = {}
+        for df in self.dataframes:
+            lti = es_lti_dict[df.ww.name]
+            if lti is not None:
+                if self.time_type == 'numeric':
+                    if lti.dtype == 'datetime64[ns]':
+                        # Woodwork cannot convert from datetime to numeric
+                        lti = lti.apply(lambda x: x.value)
+                    lti = ww.init_series(lti, logical_type='Double')
+                else:
+                    lti = ww.init_series(lti, logical_type='Datetime')
+
+                lti.name = LTI_COLUMN_NAME
+
+                if LTI_COLUMN_NAME in df.columns:
+                    if 'last_time_index' in df.ww.semantic_tags[LTI_COLUMN_NAME]:
+                        # Remove any previous last time index placed by featuretools
+                        df.ww.pop(LTI_COLUMN_NAME)
+                    else:
+                        raise ValueError("Cannot add a last time index on DataFrame with an existing "
+                                         f"'{LTI_COLUMN_NAME}' column. Please rename '{LTI_COLUMN_NAME}'.")
+
+                # Add the new column to the DataFrame
+                if isinstance(df, dd.DataFrame):
+                    new_df = df.merge(lti.reset_index(), on=df.ww.index)
+                    new_df.ww.init(
+                        name=df.ww.name,
+                        index=df.ww.index,
+                        time_index=df.ww.time_index,
+                        logical_types=df.ww.logical_types,
+                        semantic_tags={col_name: tags - {'index', 'time_index'} for col_name, tags in df.ww.semantic_tags.items()},
+                        table_metadata=df.ww.metadata,
+                        column_metadata={col_name: col_schema.metadata for col_name, col_schema in df.ww.columns.items()},
+                        use_standard_tags=df.ww.use_standard_tags
+                    )
+
+                    new_idx = new_df[new_df.ww.index]
+                    new_idx.name = None
+                    new_df.index = new_idx
+                    dfs_to_update[df.ww.name] = new_df
+                elif is_instance(df, ks, 'DataFrame'):
+                    new_df = df.merge(lti, left_on=df.ww.index, right_index=True)
+
+                    new_df.ww.init(
+                        name=df.ww.name,
+                        index=df.ww.index,
+                        time_index=df.ww.time_index,
+                        logical_types=df.ww.logical_types,
+                        semantic_tags={col_name: tags - {'index', 'time_index'} for col_name, tags in df.ww.semantic_tags.items()},
+                        table_metadata=df.ww.metadata,
+                        column_metadata={col_name: col_schema.metadata for col_name, col_schema in df.ww.columns.items()},
+                        use_standard_tags=df.ww.use_standard_tags
+                    )
+                    dfs_to_update[df.ww.name] = new_df
+                else:
+                    df.ww[LTI_COLUMN_NAME] = lti
+                    df.ww.add_semantic_tags({LTI_COLUMN_NAME: 'last_time_index'})
+                    df.ww.metadata['last_time_index'] = LTI_COLUMN_NAME
+
+        for df in dfs_to_update.values():
+            df.ww.add_semantic_tags({LTI_COLUMN_NAME: 'last_time_index'})
+            df.ww.metadata['last_time_index'] = LTI_COLUMN_NAME
+            self.dataframe_dict[df.ww.name] = df
+
+        self.reset_data_description()
     # ###########################################################################
     # #  Other ###############################################
     # ###########################################################################
@@ -1123,171 +1215,188 @@ class EntitySet(object):
 
         self.reset_data_description()
 
-    # def plot(self, to_file=None):
-    #     """
-    #     Create a UML diagram-ish graph of the EntitySet.
+    def plot(self, to_file=None):
+        """
+        Create a UML diagram-ish graph of the EntitySet.
 
-    #     Args:
-    #         to_file (str, optional) : Path to where the plot should be saved.
-    #             If set to None (as by default), the plot will not be saved.
+        Args:
+            to_file (str, optional) : Path to where the plot should be saved.
+                If set to None (as by default), the plot will not be saved.
 
-    #     Returns:
-    #         graphviz.Digraph : Graph object that can directly be displayed in
-    #             Jupyter notebooks.
+        Returns:
+            graphviz.Digraph : Graph object that can directly be displayed in
+                Jupyter notebooks. Nodes of the graph correspond to the DataFrames
+                in the EntitySet, showing the typing information for each column.
 
-    #     """
-    #     graphviz = check_graphviz()
-    #     format_ = get_graphviz_format(graphviz=graphviz,
-    #                                   to_file=to_file)
+        Note:
+            The typing information displayed for each column is based off of the Woodwork
+            ColumnSchema for that column and is represented as ``LogicalType; semantic_tags``,
+            but the standard semantic tags have been removed for brevity.
+        """
+        graphviz = check_graphviz()
+        format_ = get_graphviz_format(graphviz=graphviz,
+                                      to_file=to_file)
 
-    #     # Initialize a new directed graph
-    #     graph = graphviz.Digraph(self.id, format=format_,
-    #                              graph_attr={'splines': 'ortho'})
+        # Initialize a new directed graph
+        graph = graphviz.Digraph(self.id, format=format_,
+                                 graph_attr={'splines': 'ortho'})
 
-    #     # Draw entities
-    #     for entity in self.dataframes:
-    #         variables_string = '\l'.join([var.id + ' : ' + var.type_string  # noqa: W605
-    #                                       for var in entity.variables])
-    #         if isinstance(entity.df, dd.DataFrame):  # entity is a dask entity
-    #             label = '{%s |%s\l}' % (entity.id, variables_string)  # noqa: W605
-    #         else:
-    #             nrows = entity.shape[0]
-    #             label = '{%s (%d row%s)|%s\l}' % (entity.id, nrows, 's' * (nrows > 1), variables_string)  # noqa: W605
-    #         graph.node(entity.id, shape='record', label=label)
+        # Draw entities
+        for df in self.dataframes:
+            column_typing_info = []
+            for col_name, col_schema in df.ww.columns.items():
+                col_string = col_name + ' : ' + str(col_schema.logical_type)
 
-    #     # Draw relationships
-    #     for rel in self.relationships:
-    #         # Display the key only once if is the same for both related entities
-    #         if rel._parent_column_name == rel._child_column_name:
-    #             label = rel._parent_column_name
-    #         else:
-    #             label = '%s -> %s' % (rel._parent_column_name,
-    #                                   rel._child_column_name)
+                tags = col_schema.semantic_tags - col_schema.logical_type.standard_tags
+                if tags:
+                    col_string += '; '
+                    col_string += ', '.join(tags)
+                column_typing_info.append(col_string)
 
-    #         graph.edge(rel._child_dataframe_name, rel._parent_column_name, xlabel=label)
+            columns_string = '\l'.join(column_typing_info)  # noqa: W605
+            if isinstance(df, dd.DataFrame):  # entity is a dask entity
+                label = '{%s |%s\l}' % (df.ww.name, columns_string)  # noqa: W605
+            else:
+                nrows = df.shape[0]
+                label = '{%s (%d row%s)|%s\l}' % (df.ww.name, nrows, 's' * (nrows > 1), columns_string)  # noqa: W605
+            graph.node(df.ww.name, shape='record', label=label)
 
-    #     if to_file:
-    #         save_graph(graph, to_file, format_)
-    #     return graph
+        # Draw relationships
+        for rel in self.relationships:
+            # Display the key only once if is the same for both related entities
+            if rel._parent_column_name == rel._child_column_name:
+                label = rel._parent_column_name
+            else:
+                label = '%s -> %s' % (rel._parent_column_name,
+                                      rel._child_column_name)
 
-    # def _handle_time(self, entity_id, df, time_last=None, training_window=None, include_cutoff_time=True):
-    #     """
-    #     Filter a dataframe for all instances before time_last.
-    #     If the DataTable does not have a time index, return the original
-    #     dataframe.
-    #     """
-    #     dt = self[entity_id]
-    #     if is_instance(df, ks, 'DataFrame') and isinstance(time_last, np.datetime64):
-    #         time_last = pd.to_datetime(time_last)
-    #     if dt.time_index:
-    #         df_empty = df.empty if isinstance(df, pd.DataFrame) else False
-    #         if time_last is not None and not df_empty:
-    #             if include_cutoff_time:
-    #                 df = df[df[dt.time_index] <= time_last]
-    #             else:
-    #                 df = df[df[dt.time_index] < time_last]
-    #             if training_window is not None:
-    #                 training_window = _check_timedelta(training_window)
-    #                 if include_cutoff_time:
-    #                     mask = df[dt.time_index] > time_last - training_window
-    #                 else:
-    #                     mask = df[dt.time_index] >= time_last - training_window
-    #                 if dt.last_time_index is not None:
-    #                     lti_slice = dt.last_time_index.reindex(df.index)
-    #                     if include_cutoff_time:
-    #                         lti_mask = lti_slice > time_last - training_window
-    #                     else:
-    #                         lti_mask = lti_slice >= time_last - training_window
-    #                     mask = mask | lti_mask
-    #                 else:
-    #                     warnings.warn(
-    #                         "Using training_window but last_time_index is "
-    #                         "not set on entity %s" % (dt.id)
-    #                     )
+            graph.edge(rel._child_dataframe_name, rel._parent_dataframe_name, xlabel=label)
 
-    #                 df = df[mask]
+        if to_file:
+            save_graph(graph, to_file, format_)
+        return graph
 
-    #     for secondary_time_index, columns in dt.secondary_time_index.items():
-    #         # should we use ignore time last here?
-    #         df_empty = df.empty if isinstance(df, pd.DataFrame) else False
-    #         if time_last is not None and not df_empty:
-    #             mask = df[secondary_time_index] >= time_last
-    #             if isinstance(df, dd.DataFrame):
-    #                 for col in columns:
-    #                     df[col] = df[col].mask(mask, np.nan)
-    #             elif is_instance(df, ks, 'DataFrame'):
-    #                 df.loc[mask, columns] = None
-    #             else:
-    #                 df.loc[mask, columns] = np.nan
+    def _handle_time(self, dataframe_name, df, time_last=None, training_window=None, include_cutoff_time=True):
+        """
+        Filter a dataframe for all instances before time_last.
+        If the dataframe does not have a time index, return the original
+        dataframe.
+        """
 
-    #     return df
+        schema = self[dataframe_name].ww.schema
+        if is_instance(df, ks, 'DataFrame') and isinstance(time_last, np.datetime64):
+            time_last = pd.to_datetime(time_last)
+        if schema.time_index:
+            df_empty = df.empty if isinstance(df, pd.DataFrame) else False
+            if time_last is not None and not df_empty:
+                if include_cutoff_time:
+                    df = df[df[schema.time_index] <= time_last]
+                else:
+                    df = df[df[schema.time_index] < time_last]
+                if training_window is not None:
+                    training_window = _check_timedelta(training_window)
+                    if include_cutoff_time:
+                        mask = df[schema.time_index] > time_last - training_window
+                    else:
+                        mask = df[schema.time_index] >= time_last - training_window
+                    lti_col = schema.metadata.get('last_time_index')
+                    if lti_col is not None:
+                        if include_cutoff_time:
+                            lti_mask = df[lti_col] > time_last - training_window
+                        else:
+                            lti_mask = df[lti_col] >= time_last - training_window
+                        mask = mask | lti_mask
+                    else:
+                        warnings.warn(
+                            "Using training_window but last_time_index is "
+                            "not set for dataframe %s" % (dataframe_name)
+                        )
 
-    # def query_by_values(self, entity_id, instance_vals, variable_id=None, columns=None,
-    #                     time_last=None, training_window=None, include_cutoff_time=True):
-    #     """Query instances that have variable with given value
+                    df = df[mask]
 
-    #     Args:
-    #         entity_id (str): The id of the entity to query
-    #         instance_vals (pd.Dataframe, pd.Series, list[str] or str) :
-    #             Instance(s) to match.
-    #         variable_id (str) : Variable to query on. If None, query on index.
-    #         columns (list[str]) : Columns to return. Return all columns if None.
-    #         time_last (pd.TimeStamp) : Query data up to and including this
-    #             time. Only applies if entity has a time index.
-    #         training_window (Timedelta, optional):
-    #             Window defining how much time before the cutoff time data
-    #             can be used when calculating features. If None, all data before cutoff time is used.
-    #         include_cutoff_time (bool):
-    #             If True, data at cutoff time are included in calculating features
+        secondary_time_indexes = schema.metadata.get('secondary_time_index') or {}
+        for secondary_time_index, columns in secondary_time_indexes.items():
+            # should we use ignore time last here?
+            df_empty = df.empty if isinstance(df, pd.DataFrame) else False
+            if time_last is not None and not df_empty:
+                mask = df[secondary_time_index] >= time_last
+                if isinstance(df, dd.DataFrame):
+                    for col in columns:
+                        df[col] = df[col].mask(mask, np.nan)
+                elif is_instance(df, ks, 'DataFrame'):
+                    df.loc[mask, columns] = None
+                else:
+                    df.loc[mask, columns] = np.nan
 
-    #     Returns:
-    #         pd.DataFrame : instances that match constraints with ids in order of underlying dataframe
-    #     """
-    #     entity = self[entity_id]
-    #     if not variable_id:
-    #         variable_id = entity.index
+        return df
 
-    #     instance_vals = _vals_to_series(instance_vals, variable_id)
+    def query_by_values(self, dataframe_name, instance_vals, column_name=None, columns=None,
+                        time_last=None, training_window=None, include_cutoff_time=True):
+        """Query instances that have column with given value
 
-    #     training_window = _check_timedelta(training_window)
+        Args:
+            dataframe_name (str): The id of the dataframe to query
+            instance_vals (pd.Dataframe, pd.Series, list[str] or str) :
+                Instance(s) to match.
+            column_name (str) : Column to query on. If None, query on index.
+            columns (list[str]) : Columns to return. Return all columns if None.
+            time_last (pd.TimeStamp) : Query data up to and including this
+                time. Only applies if entity has a time index.
+            training_window (Timedelta, optional):
+                Window defining how much time before the cutoff time data
+                can be used when calculating features. If None, all data before cutoff time is used.
+            include_cutoff_time (bool):
+                If True, data at cutoff time are included in calculating features
 
-    #     if training_window is not None:
-    #         assert training_window.has_no_observations(), "Training window cannot be in observations"
+        Returns:
+            pd.DataFrame : instances that match constraints with ids in order of underlying dataframe
+        """
+        dataframe = self[dataframe_name]
+        if not column_name:
+            column_name = dataframe.ww.index
 
-    #     if instance_vals is None:
-    #         df = entity.df.copy()
+        instance_vals = _vals_to_series(instance_vals, column_name)
 
-    #     elif isinstance(instance_vals, pd.Series) and instance_vals.empty:
-    #         df = entity.df.head(0)
+        training_window = _check_timedelta(training_window)
 
-    #     else:
-    #         if is_instance(instance_vals, (dd, ks), 'Series'):
-    #             df = entity.df.merge(instance_vals.to_frame(), how="inner", on=variable_id)
-    #         elif isinstance(instance_vals, pd.Series) and is_instance(entity.df, ks, 'DataFrame'):
-    #             df = entity.df.merge(ks.DataFrame({variable_id: instance_vals}), how="inner", on=variable_id)
-    #         else:
-    #             df = entity.df[entity.df[variable_id].isin(instance_vals)]
+        if training_window is not None:
+            assert training_window.has_no_observations(), "Training window cannot be in observations"
 
-    #         if isinstance(entity.df, pd.DataFrame):
-    #             df = df.set_index(entity.index, drop=False)
+        if instance_vals is None:
+            df = dataframe.copy()
 
-    #         # ensure filtered df has same categories as original
-    #         # workaround for issue below
-    #         # github.com/pandas-dev/pandas/issues/22501#issuecomment-415982538
-    #         if pdtypes.is_categorical_dtype(entity.df[variable_id]):
-    #             categories = pd.api.types.CategoricalDtype(categories=entity.df[variable_id].cat.categories)
-    #             df[variable_id] = df[variable_id].astype(categories)
+        elif isinstance(instance_vals, pd.Series) and instance_vals.empty:
+            df = dataframe.head(0)
 
-    #     df = self._handle_time(entity_id=entity_id,
-    #                            df=df,
-    #                            time_last=time_last,
-    #                            training_window=training_window,
-    #                            include_cutoff_time=include_cutoff_time)
+        else:
+            if is_instance(instance_vals, (dd, ks), 'Series'):
+                df = dataframe.merge(instance_vals.to_frame(), how="inner", on=column_name)
+            elif isinstance(instance_vals, pd.Series) and is_instance(dataframe, ks, 'DataFrame'):
+                df = dataframe.merge(ks.DataFrame({column_name: instance_vals}), how="inner", on=column_name)
+            else:
+                df = dataframe[dataframe[column_name].isin(instance_vals)]
 
-    #     if columns is not None:
-    #         df = df[columns]
+            if isinstance(dataframe, pd.DataFrame):
+                df = df.set_index(dataframe.ww.index, drop=False)
 
-    #     return df
+            # ensure filtered df has same categories as original
+            # workaround for issue below
+            # github.com/pandas-dev/pandas/issues/22501#issuecomment-415982538
+            # Note: Woodwork stores categorical columns with a `string` dtype for Koalas
+            if dataframe.ww.columns[column_name].is_categorical and not is_instance(df, ks, 'DataFrame'):
+                categories = pd.api.types.CategoricalDtype(categories=dataframe[column_name].cat.categories)
+                df[column_name] = df[column_name].astype(categories)
+
+        df = self._handle_time(dataframe_name=dataframe_name,
+                               df=df,
+                               time_last=time_last,
+                               training_window=training_window,
+                               include_cutoff_time=include_cutoff_time)
+
+        if columns is not None:
+            df = df[columns]
+
+        return df
 
     def update_dataframe(self, dataframe_name, df, already_sorted=False, recalculate_last_time_indexes=True):
         '''Update the internal dataframe of an EntitySet table, keeping Woodwork typing information the same.
@@ -1296,6 +1405,13 @@ class EntitySet(object):
         '''
         if not isinstance(df, type(self[dataframe_name])):
             raise TypeError('Incorrect DataFrame type used')
+
+        # If the original DataFrame has a last time index column and the new one doesnt
+        # remove the column and the reference to last time index from that dataframe
+        last_time_index_column = self[dataframe_name].ww.metadata.get('last_time_index')
+        if last_time_index_column is not None and last_time_index_column not in df.columns:
+            self[dataframe_name].ww.pop(last_time_index_column)
+            del self[dataframe_name].ww.metadata['last_time_index']
 
         old_column_names = list(self[dataframe_name].columns)
         if len(df.columns) != len(old_column_names):
@@ -1315,7 +1431,6 @@ class EntitySet(object):
             if updated_series is not series:
                 df[col_name] = updated_series
 
-        # --> WW bug: if metadata has a series in it, cannot deepcopy
         df.ww.init(schema=self[dataframe_name].ww._schema)
         # Make sure column ordering matches original ordering
         df = df.ww[old_column_names]
@@ -1331,8 +1446,8 @@ class EntitySet(object):
 
         df_metadata = self[dataframe_name].ww.metadata
         self.set_secondary_time_index(dataframe_name, df_metadata.get('secondary_time_index'))
-        if recalculate_last_time_indexes and df_metadata.get('last_time_index') is not None:
-            self.add_last_time_indexes(updated_dataframes=[self[dataframe_name].ww.name])
+        if recalculate_last_time_indexes and last_time_index_column is not None:
+            self.add_last_time_indexes(updated_dataframes=[dataframe_name])
         self.reset_data_description()
 
     def _check_time_indexes(self):

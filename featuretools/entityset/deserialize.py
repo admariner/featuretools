@@ -6,7 +6,6 @@ import tempfile
 import pandas as pd
 import woodwork as ww
 from woodwork.deserialize import read_woodwork_table
-from woodwork import logical_types as ltypes
 
 from featuretools.entityset.relationship import Relationship
 from featuretools.utils.gen_utils import check_schema_version
@@ -32,7 +31,6 @@ def description_to_entityset(description, **kwargs):
     path = description.get('path')
     entityset = EntitySet(description['id'])
 
-    last_time_index = []
     for df in description['dataframes'].values():
         if path is not None:
             data_path = os.path.join(path, 'data', df['name'])
@@ -45,9 +43,6 @@ def description_to_entityset(description, **kwargs):
     for relationship in description['relationships']:
         rel = Relationship.from_dictionary(relationship, entityset)
         entityset.add_relationship(relationship=rel)
-
-    if len(last_time_index):
-        entityset.add_last_time_indexes(updated_entities=last_time_index)
 
     return entityset
 
@@ -62,9 +57,7 @@ def empty_dataframe(description):
         df (DataFrame) : Empty dataframe with Woodwork initialized.
     '''
     # TODO: Can we update Woodwork to return an empty initialized dataframe from a description
-    # instead of using this function?
-    loading_info = description['loading_info']
-    table_type = loading_info.get('table_type', 'pandas')
+    # instead of using this function? Or otherwise eliminate? Issue #1476
     logical_types = {}
     semantic_tags = {}
     column_descriptions = {}
@@ -96,12 +89,10 @@ def empty_dataframe(description):
             # Make sure categories are recreated properly
             cat_values = col['physical_type']['cat_values']
             cat_dtype = col['physical_type']['cat_dtype']
-            if table_type == 'pandas':
-                cat_object = pd.CategoricalDtype(pd.Index(cat_values, dtype=cat_dtype))
-            else:
-                cat_object = pd.CategoricalDtype(pd.Series(cat_values))
+            cat_object = pd.CategoricalDtype(pd.Index(cat_values, dtype=cat_dtype))
             category_dtypes[col_name] = cat_object
-    dataframe = pd.DataFrame(columns=columns)
+    dataframe = pd.DataFrame(columns=columns).astype(category_dtypes)
+
     dataframe.ww.init(
         name=description.get('name'),
         index=description.get('index'),
