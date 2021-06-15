@@ -1,11 +1,11 @@
 import logging
+import warnings
 from collections import defaultdict
 
 from dask import dataframe as dd
-from woodwork import logical_types as ltypes
 from woodwork.column_schema import ColumnSchema
 
-from featuretools import primitives
+from featuretools import primitives, variable_types
 from featuretools.entityset.relationship import RelationshipPath
 from featuretools.feature_base import (
     AggregationFeature,
@@ -25,9 +25,7 @@ from featuretools.primitives.options_utils import (
     generate_all_primitive_options,
     ignore_entity_for_primitive
 )
-from featuretools.utils.gen_utils import Library, import_or_none, is_instance
-
-ks = import_or_none('databricks.koalas')
+from featuretools.utils.gen_utils import Library
 
 logger = logging.getLogger('featuretools')
 
@@ -150,6 +148,13 @@ class DeepFeatureSynthesis(object):
         # need to change max_depth to None because DFs terminates when  <0
         if max_depth == -1:
             max_depth = None
+
+        # if just one entity, set max depth to 1 (transform stacking rule)
+        if len(entityset.entity_dict) == 1 and (max_depth is None or max_depth > 1):
+            warnings.warn("Only one entity in entityset, changing max_depth to "
+                          "1 since deeper features cannot be created")
+            max_depth = 1
+
         self.max_depth = max_depth
 
         self.max_features = max_features
@@ -182,15 +187,13 @@ class DeepFeatureSynthesis(object):
         self.target_entity_id = target_entity_id
         self.es = entityset
 
-        if any(isinstance(entity.df, dd.DataFrame) for entity in self.es.entities):
-            entityset_type = Library.DASK
-        elif any(is_instance(entity.df, ks, 'DataFrame') for entity in self.es.entities):
-            entityset_type = Library.KOALAS
-        else:
-            entityset_type = Library.PANDAS
+        for library in Library:
+            if library.value == self.es.dataframe_type:
+                df_library = library
+                break
 
         if agg_primitives is None:
-            agg_primitives = [p for p in primitives.get_default_aggregation_primitives() if entityset_type in p.compatibility]
+            agg_primitives = [p for p in primitives.get_default_aggregation_primitives() if df_library in p.compatibility]
         self.agg_primitives = []
         agg_prim_dict = primitives.get_aggregation_primitives()
         for a in agg_primitives:
@@ -208,7 +211,7 @@ class DeepFeatureSynthesis(object):
         self.agg_primitives.sort()
 
         if trans_primitives is None:
-            trans_primitives = [p for p in primitives.get_default_transform_primitives() if entityset_type in p.compatibility]
+            trans_primitives = [p for p in primitives.get_default_transform_primitives() if df_library in p.compatibility]
         self.trans_primitives = []
         for t in trans_primitives:
             t = check_trans_primitive(t)
@@ -242,10 +245,10 @@ class DeepFeatureSynthesis(object):
             primitive_options = {}
         all_primitives = self.trans_primitives + self.agg_primitives + \
             self.where_primitives + self.groupby_trans_primitives
-        bad_primitives = [prim.name for prim in all_primitives if entityset_type not in prim.compatibility]
+        bad_primitives = [prim.name for prim in all_primitives if df_library not in prim.compatibility]
         if bad_primitives:
             msg = 'Selected primitives are incompatible with {} EntitySets: {}'
-            raise ValueError(msg.format(entityset_type.value, ', '.join(bad_primitives)))
+            raise ValueError(msg.format(df_library.value, ', '.join(bad_primitives)))
 
         self.primitive_options, self.ignore_entities, self.ignore_variables =\
             generate_all_primitive_options(all_primitives,
