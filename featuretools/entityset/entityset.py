@@ -663,11 +663,6 @@ class EntitySet(object):
             self._set_secondary_time_index(dataframe, secondary_time_index=secondary_time_index)
 
         self.dataframe_dict[dataframe.ww.name] = dataframe
-        dataframe.ww.metadata['entityset'] = self.metadata
-        for col in dataframe.columns:
-            dataframe.ww.columns[col].metadata['entityset'] = self.metadata
-            dataframe.ww.columns[col].metadata['dataframe_name'] = dataframe.ww.name
-            
         self.reset_data_description()
         return self
 
