@@ -684,7 +684,7 @@ class GroupByTransformFeature(TransformFeature):
     def __init__(self, base_features, primitive, groupby, name=None):
         if not isinstance(groupby, FeatureBase):
             groupby = IdentityFeature(groupby)
-        assert "category" in groupby.column_schema.semantic_tags or "foreign_key" in groupby.column_schema.semantic_tags
+        assert len({"category", "foreign_key"} - groupby.column_schema.semantic_tags) < 2
         self.groupby = groupby
 
         if hasattr(base_features, '__iter__'):
