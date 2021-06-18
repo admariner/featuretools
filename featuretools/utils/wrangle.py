@@ -89,11 +89,12 @@ def _check_time_against_column(time, time_column):
         return 'numeric' in time_column.ww.semantic_tags
     elif isinstance(time, (pd.Timestamp, datetime, pd.DateOffset)):
         return isinstance(time_column.ww.logical_type, ltypes.Datetime)
-    # TODO: re-evaluate this loop
-    # elif isinstance(time, Timedelta):
-    #     return (isinstance(time_column, (variable_types.Datetime, variable_types.DatetimeTimeIndex)) or
-    #             (isinstance(time_column, (variable_types.Ordinal, variable_types.Numeric, variable_types.TimeIndex)) and
-    #              time.unit not in Timedelta._time_units))
+    elif isinstance(time, Timedelta):
+        return (isinstance(time_column.ww.logical_type, ltypes.Datetime) or
+                ((isinstance(time_column.ww.logical_type, ltypes.Ordinal) or
+                 'numeric' in time_column.ww.semantic_tags or
+                 'time_index' in time_column.ww.semantic_tags) and
+                 time.unit not in Timedelta._time_units))
     else:
         return False
 

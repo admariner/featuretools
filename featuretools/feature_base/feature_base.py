@@ -338,9 +338,6 @@ class IdentityFeature(FeatureBase):
         self.column_name = column_name
         column_accessor = entityset[dataframe_name].ww[column_name]
         self.return_type = column_accessor.ww.schema
-        if name is None:
-            # are names guaranteed?
-            name = column_accessor.ww.name
         super(IdentityFeature, self).__init__(entityset=entityset,
                                               dataframe_name=dataframe_name,
                                               base_features=[],
@@ -516,7 +513,7 @@ class AggregationFeature(FeatureBase):
             self.use_previous = _check_timedelta(use_previous)
             assert len(base_features) > 0
             time_index = base_features[0].dataframe.ww.time_index
-            time_col = base_features[0].dataframe[time_index]
+            time_col = base_features[0].dataframe.ww[time_index]
             assert time_index is not None, ("Use previous can only be defined "
                                             "on entities with a time index")
             assert _check_time_against_column(self.use_previous, time_col)
@@ -746,25 +743,27 @@ class Feature(object):
     def __new__(self, base, dataframe_name=None, column_name=None, groupby=None, parent_dataframe_name=None,
                 primitive=None, use_previous=None, where=None):
         # either direct or identity
-        if column_name is not None and primitive is None:
-            return IdentityFeature(base, dataframe_name, column_name)
-        elif primitive is None and dataframe_name is not None:
-            return DirectFeature(base, dataframe_name)
-        elif primitive is not None and parent_dataframe_name is not None:
-            assert isinstance(primitive, AggregationPrimitive) or issubclass(primitive, AggregationPrimitive)
-            if dataframe_name is not None:
+        if dataframe_name is not None:
+            if column_name is not None:
                 base = IdentityFeature(base, dataframe_name, column_name)
-            return AggregationFeature(base, parent_dataframe_name=parent_dataframe_name,
-                                        use_previous=use_previous, where=where,
-                                        primitive=primitive)
-        elif primitive is not None:
-            assert (isinstance(primitive, TransformPrimitive) or
-                    issubclass(primitive, TransformPrimitive))
-            if groupby is not None:
-                return GroupByTransformFeature(base,
-                                               primitive=primitive,
-                                               groupby=groupby)
-            return TransformFeature(base, primitive=primitive)
+            else:
+                return DirectFeature(base, dataframe_name)
+
+        if primitive is not None:
+            if parent_dataframe_name is not None:
+                assert isinstance(primitive, AggregationPrimitive) or issubclass(primitive, AggregationPrimitive)
+                return AggregationFeature(base,
+                                          parent_dataframe_name=parent_dataframe_name,
+                                          use_previous=use_previous, where=where,
+                                          primitive=primitive)
+            elif isinstance(primitive, TransformPrimitive) or issubclass(primitive, TransformPrimitive):
+                if groupby is not None:
+                    return GroupByTransformFeature(base,
+                                                primitive=primitive,
+                                                groupby=groupby)
+                return TransformFeature(base, primitive=primitive)
+        elif column_name is not None:
+            return base
 
         raise Exception("Unrecognized feature initialization")
 
